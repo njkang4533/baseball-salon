@@ -13,17 +13,36 @@ if not OPENAI_API_KEY:
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db.json')
+FIREBASE_PROJECT_ID = "baseball-salon"
+FIREBASE_API_KEY = "AIzaSyBc4Sjf5cof3zfNUjWkHs_oNaX_8XwccCY"
 
-def load_db():
-    if not os.path.exists(DB_PATH):
-        return {"auth": {"pins": ["1234"]}, "articles": [], "draftArticles": []}
-    with open(DB_PATH, 'r', encoding='utf-8') as f:
-        return json.load(f)
+def get_firestore_documents(collection_id):
+    url = f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/databases/(default)/documents/{collection_id}?key={FIREBASE_API_KEY}"
+    resp = requests.get(url)
+    if resp.status_code == 200:
+        return resp.json().get('documents', [])
+    return []
 
-def save_db(db_data):
-    with open(DB_PATH, 'w', encoding='utf-8') as f:
-        json.dump(db_data, f, ensure_ascii=False, indent=2)
+def dict_to_firestore(d):
+    fields = {}
+    for k, v in d.items():
+        if isinstance(v, str):
+            fields[k] = {"stringValue": v}
+        elif isinstance(v, int):
+            fields[k] = {"integerValue": str(v)}
+        elif isinstance(v, float):
+            fields[k] = {"doubleValue": v}
+        elif isinstance(v, bool):
+            fields[k] = {"booleanValue": v}
+        elif isinstance(v, list):
+            fields[k] = {"arrayValue": {"values": [{"stringValue": item} for item in v]}}
+    return fields
+
+def add_firestore_document(collection_id, doc_id, data):
+    url = f"https://firestore.googleapis.com/v1/projects/{FIREBASE_PROJECT_ID}/databases/(default)/documents/{collection_id}?documentId={doc_id}&key={FIREBASE_API_KEY}"
+    payload = {"fields": dict_to_firestore(data)}
+    resp = requests.post(url, json=payload)
+    return resp.status_code in [200, 201]
 
 def fetch_latest_pubmed_ids(term="baseball pitching biomechanics", max_results=2):
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={term}&retmode=json&retmax={max_results}&sort=date"
@@ -116,25 +135,30 @@ def summarize_with_ai(article_data):
         }
 
 def main():
-    print("Loading DB...")
-    db = load_db()
-    drafts = db.get("draftArticles", [])
-    
-    # Check existing originalUrls to avoid duplicates
+    print("Checking existing articles in Firebase...")
     existing_urls = set()
-    for article in db.get("articles", []):
-        existing_urls.add(article.get("originalUrl"))
-    for draft in drafts:
-        existing_urls.add(draft.get("originalUrl"))
-        
+    
+    # Check published articles
+    published_docs = get_firestore_documents("articles")
+    for doc in published_docs:
+        url_field = doc.get('fields', {}).get('originalUrl', {}).get('stringValue')
+        if url_field:
+            existing_urls.add(url_field)
+            
+    # Check drafts
+    draft_docs = get_firestore_documents("draftArticles")
+    for doc in draft_docs:
+        url_field = doc.get('fields', {}).get('originalUrl', {}).get('stringValue')
+        if url_field:
+            existing_urls.add(url_field)
+            
     print("Fetching latest PubMed articles...")
-    # Using generic baseball biomechanics term
     pmids = fetch_latest_pubmed_ids("baseball pitching biomechanics", 2)
     
     for pmid in pmids:
         original_url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
         if original_url in existing_urls:
-            print(f"Article {pmid} already exists. Skipping.")
+            print(f"Article {pmid} already exists in Firebase. Skipping.")
             continue
             
         print(f"Fetching details for PMID {pmid}...")
@@ -148,11 +172,11 @@ def main():
         if not ai_result:
             continue
             
+        doc_id = f"draft_{int(datetime.now().timestamp())}_{pmid}"
         new_draft = {
-            "id": f"draft_{int(datetime.now().timestamp())}_{pmid}",
             "type": "paper",
             "sourceType": "논문",
-            "country": "US", # default
+            "country": "US",
             "category": "바이오메카닉스",
             "title": ai_result["title"],
             "date": datetime.now().strftime("%Y. %m. %d"),
@@ -163,13 +187,15 @@ def main():
             "originalUrl": original_url,
             "summary": ai_result["summary"],
             "applications": ai_result["applications"],
-            "image_base64": ai_result.get("image_base64", "")
+            "image_base64": ai_result.get("image_base64", ""),
+            "createdAt": int(datetime.now().timestamp() * 1000)
         }
         
-        drafts.insert(0, new_draft)
-        db["draftArticles"] = drafts
-        save_db(db)
-        print(f"Successfully added draft for {pmid}.")
+        success = add_firestore_document("draftArticles", doc_id, new_draft)
+        if success:
+            print(f"Successfully added draft for {pmid} to Firebase.")
+        else:
+            print(f"Failed to add draft for {pmid} to Firebase.")
 
     print("Done!")
 
