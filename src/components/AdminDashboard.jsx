@@ -19,7 +19,11 @@ export default function AdminDashboard({ onPublishSuccess }) {
       });
   }, []);
 
+  const [publishingId, setPublishingId] = useState(null);
+
   const handlePublish = async (draft) => {
+    if (publishingId) return;
+    setPublishingId(draft.id);
     const newArticle = { ...draft };
     delete newArticle.id; 
     newArticle.title = newArticle.title.replace('[AI 초안] ', '');
@@ -32,6 +36,9 @@ export default function AdminDashboard({ onPublishSuccess }) {
       if (onPublishSuccess) onPublishSuccess();
     } catch (err) {
       console.error(err);
+      alert("발행 중 오류가 발생했습니다.");
+    } finally {
+      setPublishingId(null);
     }
   };
 
@@ -96,9 +103,13 @@ export default function AdminDashboard({ onPublishSuccess }) {
                     />
                     <button
                       onClick={async () => {
-                        const updatedDraft = { ...draft, image_base64: "" };
-                        await api.updateDraftArticle(updatedDraft);
-                        setDrafts(drafts.map(d => d.id === draft.id ? updatedDraft : d));
+                        try {
+                          const updatedDraft = { ...draft, image_base64: "" };
+                          await api.updateDraftArticle(updatedDraft);
+                          setDrafts(drafts.map(d => d.id === draft.id ? updatedDraft : d));
+                        } catch (e) {
+                          alert("삭제 실패");
+                        }
                       }}
                       className="absolute top-2 right-2 bg-red-500/80 text-white p-1.5 rounded text-xs opacity-0 group-hover/img:opacity-100 transition-opacity"
                     >
@@ -108,7 +119,7 @@ export default function AdminDashboard({ onPublishSuccess }) {
                 ) : (
                   <div className="mb-2">
                     <label className="block text-xs text-gray-400 mb-2">
-                      <span className="text-neon-lime font-bold">💡 추천 이미지:</span> 16:9 비율 (예: 800x450px), 용량 1MB 이하의 최적화된 사진을 제미나이 등에서 생성 후 업로드해주세요.
+                      <span className="text-neon-lime font-bold">💡 추천 이미지:</span> 16:9 비율 (예: 800x450px), 용량 <span className="text-red-400">500KB 이하</span>의 최적화된 사진을 제미나이 등에서 생성 후 업로드해주세요. (DB 용량 제한)
                     </label>
                     <input 
                       type="file" 
@@ -116,16 +127,20 @@ export default function AdminDashboard({ onPublishSuccess }) {
                       onChange={(e) => {
                         const file = e.target.files[0];
                         if (!file) return;
-                        if (file.size > 2 * 1024 * 1024) {
-                          alert("용량이 너무 큽니다. 2MB 이하의 이미지를 올려주세요.");
+                        if (file.size > 500 * 1024) {
+                          alert("파이어베이스 실시간 DB 1MB 제한으로 인해 500KB 이하의 이미지만 업로드 가능합니다! 이미지를 압축하거나 더 작게 생성해주세요.");
                           return;
                         }
                         const reader = new FileReader();
                         reader.onload = async (evt) => {
-                          const base64Str = evt.target.result.split(',')[1];
-                          const updatedDraft = { ...draft, image_base64: base64Str };
-                          await api.updateDraftArticle(updatedDraft);
-                          setDrafts(drafts.map(d => d.id === draft.id ? updatedDraft : d));
+                          try {
+                            const base64Str = evt.target.result.split(',')[1];
+                            const updatedDraft = { ...draft, image_base64: base64Str };
+                            await api.updateDraftArticle(updatedDraft);
+                            setDrafts(drafts.map(d => d.id === draft.id ? updatedDraft : d));
+                          } catch (err) {
+                            alert("업로드 실패: 파일이 너무 커서 DB에서 거부했습니다.");
+                          }
                         };
                         reader.readAsDataURL(file);
                       }}
