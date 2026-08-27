@@ -44,17 +44,29 @@ def add_firestore_document(collection_id, doc_id, data):
     resp = requests.post(url, json=payload)
     return resp.status_code in [200, 201]
 
+import time
+
 def fetch_latest_pubmed_ids(term, max_results=2):
+    time.sleep(1) # API Rate Limit 방지
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={term}&retmode=json&retmax={max_results}&sort=date"
-    response = requests.get(url)
-    data = response.json()
-    return data.get("esearchresult", {}).get("idlist", [])
+    try:
+        response = requests.get(url)
+        data = response.json()
+        return data.get("esearchresult", {}).get("idlist", [])
+    except Exception as e:
+        print(f"Search API Error: {e}")
+        return []
 
 def fetch_pubmed_details(pubmed_id):
+    time.sleep(1) # API Rate Limit 방지
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id={pubmed_id}&retmode=xml"
-    response = requests.get(url)
-    root = ET.fromstring(response.content)
-    
+    try:
+        response = requests.get(url)
+        root = ET.fromstring(response.content)
+    except Exception as e:
+        print(f"XML Parsing Error for {pubmed_id}: {e}")
+        return None
+        
     article = root.find(".//Article")
     if article is None:
         return None
