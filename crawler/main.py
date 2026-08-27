@@ -44,7 +44,7 @@ def add_firestore_document(collection_id, doc_id, data):
     resp = requests.post(url, json=payload)
     return resp.status_code in [200, 201]
 
-def fetch_latest_pubmed_ids(term="baseball pitching biomechanics", max_results=2):
+def fetch_latest_pubmed_ids(term, max_results=2):
     url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={term}&retmode=json&retmax={max_results}&sort=date"
     response = requests.get(url)
     data = response.json()
@@ -152,16 +152,28 @@ def main():
         if url_field:
             existing_urls.add(url_field)
             
-    print("Fetching latest PubMed articles...")
-    pmids = fetch_latest_pubmed_ids("baseball pitching biomechanics", 2)
+    print("Fetching latest PubMed articles across multiple categories...")
+    search_queries = {
+        "바이오메카닉스": "baseball biomechanics",
+        "뇌과학/인지": "baseball (cognition OR brain)",
+        "데이터분석": "baseball (statistics OR analytics)",
+        "멘탈코칭": "baseball (mental OR psychology OR anxiety)"
+    }
     
-    for pmid in pmids:
+    tasks = {}
+    for category, query in search_queries.items():
+        pmids = fetch_latest_pubmed_ids(query, 2)
+        for pmid in pmids:
+            if pmid not in tasks:
+                tasks[pmid] = category
+                
+    for pmid, category in tasks.items():
         original_url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
         if original_url in existing_urls:
             print(f"Article {pmid} already exists in Firebase. Skipping.")
             continue
             
-        print(f"Fetching details for PMID {pmid}...")
+        print(f"Fetching details for PMID {pmid} ({category})...")
         details = fetch_pubmed_details(pmid)
         if not details or not details['abstract']:
             print(f"No abstract found for {pmid}. Skipping.")
@@ -177,7 +189,7 @@ def main():
             "type": "paper",
             "sourceType": "논문",
             "country": "US",
-            "category": "바이오메카닉스",
+            "category": category,
             "title": ai_result["title"],
             "date": datetime.now().strftime("%Y. %m. %d"),
             "readTime": "3 min read",
