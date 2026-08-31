@@ -42,10 +42,10 @@ export default function AdminDashboard({ onPublishSuccess }) {
     }
   };
 
-  const handleReject = async (id) => {
+  const handleReject = async (draft) => {
     try {
-      await api.deleteDraftArticle(id);
-      setDrafts(drafts.filter(d => d.id !== id));
+      await api.rejectDraftArticle(draft);
+      setDrafts(drafts.filter(d => d.id !== draft.id));
     } catch (err) {
       console.error(err);
     }
@@ -179,7 +179,7 @@ export default function AdminDashboard({ onPublishSuccess }) {
                   발행
                 </button>
                 <button 
-                  onClick={() => handleReject(draft.id)}
+                  onClick={() => handleReject(draft)}
                   className="flex-1 bg-red-500/10 text-red-400 py-2.5 rounded-lg text-xs font-extrabold flex items-center justify-center hover:bg-red-500/20 active:scale-95 transition-all border border-red-500/20"
                 >
                   <Trash2 size={14} className="mr-1.5" />

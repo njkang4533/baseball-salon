@@ -164,6 +164,13 @@ def main():
         if url_field:
             existing_urls.add(url_field)
             
+    # Check trash (rejected by admin)
+    trash_docs = get_firestore_documents("trashUrls")
+    for doc in trash_docs:
+        url_field = doc.get('fields', {}).get('originalUrl', {}).get('stringValue')
+        if url_field:
+            existing_urls.add(url_field)
+            
     print("Fetching latest PubMed articles across multiple categories...")
     search_queries = {
         "바이오메카닉스": "baseball biomechanics",

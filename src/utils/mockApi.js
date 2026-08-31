@@ -32,6 +32,13 @@ export const deleteDraftArticle = async (id) => {
   await deleteDoc(doc(db, "draftArticles", id));
 };
 
+export const rejectDraftArticle = async (draft) => {
+  if (draft.originalUrl) {
+    await setDoc(doc(db, "trashUrls", draft.id), { originalUrl: draft.originalUrl });
+  }
+  await deleteDoc(doc(db, "draftArticles", draft.id));
+};
+
 export const updateDraftArticle = async (updatedDraft) => {
   const docRef = doc(db, "draftArticles", updatedDraft.id);
   const dataToUpdate = { ...updatedDraft };
