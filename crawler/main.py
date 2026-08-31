@@ -146,64 +146,119 @@ def summarize_with_ai(article_data):
             "applications": []
         }
 
+def fetch_latest_google_news(term, max_results=2):
+    time.sleep(1)
+    url = f"https://news.google.com/rss/search?q={term}+when:7d&hl=en-US&gl=US&ceid=US:en"
+    try:
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        root = ET.fromstring(response.content)
+        items = root.findall(".//item")
+        results = []
+        for item in items[:max_results]:
+            title = item.find("title").text if item.find("title") is not None else ""
+            link = item.find("link").text if item.find("link") is not None else ""
+            desc = item.find("description").text if item.find("description") is not None else ""
+            results.append({
+                "title": title,
+                "url": link,
+                "abstract": desc,
+                "source": "News/Blog"
+            })
+        return results
+    except Exception as e:
+        print(f"News RSS Error: {e}")
+        return []
+
+def summarize_news_with_ai(news_data):
+    prompt = f"""
+    You are an AI assistant helping a baseball coach. Read the following article/blog summary about baseball and extract useful insights.
+    
+    Title: {news_data['title']}
+    Content Snippet: {news_data['abstract']}
+    
+    Analyze the snippet and extract detailed insights for baseball coaches. 
+    Return ONLY a JSON object (no markdown) with this exact structure:
+    {{
+        "title": "Korean translation of the title",
+        "summary": "기사/블로그의 핵심 내용을 코치들이 깊이 있게 이해할 수 있도록 2~3문단으로 상세하게 풀어서 설명해 주세요. (한국어). 문단 바꿈은 <br><br>를 사용하고, 핵심 문장에는 <span class='text-neon-lime font-bold'>태그를 씌워 강조해 주세요.",
+        "coachingPoint": "A 1-2 sentence actionable takeaway for a baseball coach.",
+        "applications": ["현장 적용 방법 1", "현장 적용 방법 2", "현장 적용 방법 3"]
+    }}
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={ "type": "json_object" }
+        )
+        text = response.choices[0].message.content.strip()
+        if text.startswith("```json"): text = text[7:]
+        if text.endswith("```"): text = text[:-3]
+        result_json = json.loads(text.strip())
+        result_json['image_base64'] = ""
+        return result_json
+    except Exception as e:
+        print(f"API Error: {e}")
+        return None
+
 def main():
     print("Checking existing articles in Firebase...")
     existing_urls = set()
     
-    # Check published articles
-    published_docs = get_firestore_documents("articles")
-    for doc in published_docs:
-        url_field = doc.get('fields', {}).get('originalUrl', {}).get('stringValue')
-        if url_field:
-            existing_urls.add(url_field)
+    for coll in ["articles", "draftArticles", "trashUrls"]:
+        docs = get_firestore_documents(coll)
+        for doc in docs:
+            url_field = doc.get('fields', {}).get('originalUrl', {}).get('stringValue')
+            if url_field:
+                existing_urls.add(url_field)
             
-    # Check drafts
-    draft_docs = get_firestore_documents("draftArticles")
-    for doc in draft_docs:
-        url_field = doc.get('fields', {}).get('originalUrl', {}).get('stringValue')
-        if url_field:
-            existing_urls.add(url_field)
-            
-    # Check trash (rejected by admin)
-    trash_docs = get_firestore_documents("trashUrls")
-    for doc in trash_docs:
-        url_field = doc.get('fields', {}).get('originalUrl', {}).get('stringValue')
-        if url_field:
-            existing_urls.add(url_field)
-            
-    print("Fetching latest PubMed articles across multiple categories...")
-    search_queries = {
+    print("Fetching latest PubMed articles and News/Blogs...")
+    search_queries_pubmed = {
         "바이오메카닉스": "baseball biomechanics",
-        "뇌과학/인지": "baseball (cognition OR brain)",
-        "데이터분석": "baseball (statistics OR analytics)",
-        "멘탈코칭": "baseball (mental OR psychology OR anxiety)"
+        "뇌과학/인지": 'baseball AND (cognition OR brain OR "reaction time" OR "response time" OR "decision making")',
+        "데이터분석": "baseball AND (statistics OR analytics)",
+        "멘탈코칭": "baseball AND (mental OR psychology OR anxiety)"
     }
     
+    search_queries_news = {
+        "바이오메카닉스": "baseball biomechanics coaching blog",
+        "뇌과학/인지": "baseball cognition reaction time training",
+        "데이터분석": "baseball analytics sabermetrics",
+        "멘탈코칭": "baseball mental toughness psychology"
+    }
+    
+    # 1. Fetch PubMed
     tasks = {}
-    for category, query in search_queries.items():
-        pmids = fetch_latest_pubmed_ids(query, 2)
+    for category, query in search_queries_pubmed.items():
+        pmids = fetch_latest_pubmed_ids(query, 1) # reduced to 1 to save time
         for pmid in pmids:
             if pmid not in tasks:
-                tasks[pmid] = category
+                tasks[pmid] = {"type": "pubmed", "id": pmid, "category": category}
                 
-    for pmid, category in tasks.items():
+    # 2. Fetch News/Blogs
+    news_tasks = []
+    for category, query in search_queries_news.items():
+        news_items = fetch_latest_google_news(query, 1)
+        for item in news_items:
+            item["category"] = category
+            news_tasks.append(item)
+                
+    # Process PubMed
+    for pmid, info in tasks.items():
+        category = info["category"]
         original_url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
         if original_url in existing_urls:
-            print(f"Article {pmid} already exists in Firebase. Skipping.")
             continue
             
-        print(f"Fetching details for PMID {pmid} ({category})...")
+        print(f"Fetching PubMed {pmid} ({category})...")
         details = fetch_pubmed_details(pmid)
-        if not details or not details['abstract']:
-            print(f"No abstract found for {pmid}. Skipping.")
-            continue
+        if not details or not details['abstract']: continue
             
-        print(f"Summarizing with AI for {pmid}...")
         ai_result = summarize_with_ai(details)
-        if not ai_result:
-            continue
+        if not ai_result: continue
             
-        doc_id = f"draft_{int(datetime.now().timestamp())}_{pmid}"
+        doc_id = f"draft_pub_{int(datetime.now().timestamp())}_{pmid}"
         new_draft = {
             "type": "paper",
             "sourceType": "논문",
@@ -221,12 +276,39 @@ def main():
             "image_base64": ai_result.get("image_base64", ""),
             "createdAt": int(datetime.now().timestamp() * 1000)
         }
-        
-        success = add_firestore_document("draftArticles", doc_id, new_draft)
-        if success:
-            print(f"Successfully added draft for {pmid} to Firebase.")
-        else:
-            print(f"Failed to add draft for {pmid} to Firebase.")
+        add_firestore_document("draftArticles", doc_id, new_draft)
+
+    # Process News
+    for news in news_tasks:
+        category = news["category"]
+        original_url = news["url"]
+        if original_url in existing_urls:
+            continue
+            
+        print(f"Fetching News/Blog {original_url} ({category})...")
+        ai_result = summarize_news_with_ai(news)
+        if not ai_result: continue
+            
+        doc_id = f"draft_news_{int(datetime.now().timestamp())}"
+        new_draft = {
+            "type": "paper",
+            "sourceType": "블로그/기사",
+            "country": "US",
+            "category": category,
+            "title": ai_result["title"],
+            "date": datetime.now().strftime("%Y. %m. %d"),
+            "readTime": "3 min read",
+            "coachingPoint": ai_result["coachingPoint"],
+            "source": news["source"],
+            "authors": "Web Article",
+            "originalUrl": original_url,
+            "summary": ai_result["summary"],
+            "applications": ai_result["applications"],
+            "image_base64": "",
+            "createdAt": int(datetime.now().timestamp() * 1000)
+        }
+        add_firestore_document("draftArticles", doc_id, new_draft)
+        time.sleep(1)
 
     print("Done!")
 
